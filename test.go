@@ -1,14 +1,21 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"gesture/improvedGoHook"
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
 	hook "github.com/robotn/gohook"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 )
+
+var lastUpdated time.Time
+var mu sync.Mutex
 
 func main() {
 	//add()
@@ -61,20 +68,105 @@ func main() {
 	//<-improvedGoHook.ProcessMouse(s)
 	//fmt.Println("process unblocked")
 
-	ok := improvedGoHook.ImprovedAddMouse("sideFar", true)
-	if ok {
-		fmt.Println("side button hold")
-	}
-	posList := onGestureStart()
+	//posChannel := make(chan []mouseMovement)
+	//updateChannel := make(chan bool)
+	posList := make([]mouseMovement, 0)
+	//server := sse.New()
+	//server.CreateStream("messages")
+	go func() {
+		for {
+			ok := improvedGoHook.ImprovedAddMouse("sideFar", true)
+			if ok {
+				fmt.Println("side button hold")
+			}
+			newPosList := onGestureStart()
+
+			mu.Lock()
+			posList = newPosList
+			mu.Unlock()
+			lastUpdated = time.Now()
+			//fmt.Println("sending reload message")
+			//updateChannel <- true
+			//server.Publish("messages", &sse.Event{
+			//	Data: []byte("reload"),
+			//})
+			// Send the new positions to the channel
+			//fmt.Println("sending posList")
+			//posChannel <- newPosList
+			//fmt.Println("posList sent")
+		}
+	}()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("endpt requested")
+		fmt.Println("running the httpserver method")
 		httpserver(w, r, posList)
+		fmt.Println("done with http server method")
 	})
+
+	type ResponseData struct {
+		LastUpdated time.Time `json:"lastUpdated"`
+	}
+
+	http.HandleFunc("/lastUpdated", func(w http.ResponseWriter, r *http.Request) {
+		// Create data to send in response
+		data := ResponseData{
+			LastUpdated: lastUpdated,
+		}
+
+		// Set Content-Type header
+		w.Header().Set("Content-Type", "application/json")
+
+		// Marshal data into JSON
+		jsonResponse, err := json.Marshal(data)
+		if err != nil {
+			// Handle error
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Write JSON response
+		w.Write(jsonResponse)
+	})
+
+	//http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+	//	fmt.Println("sse client start")
+	//	go func() {
+	//		// Received Browser Disconnection
+	//		<-r.Context().Done()
+	//		println("The client is disconnected here")
+	//		return
+	//	}()
+	//
+	//	server.ServeHTTP(w, r)
+	//})
+
+	// SSE handler
+	//http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+	//	w.Header().Set("Content-Type", "text/event-stream")
+	//	w.Header().Set("Cache-Control", "no-cache")
+	//	w.Header().Set("Connection", "keep-alive")
+	//
+	//	// Notify the client to refresh
+	//	for {
+	//		select {
+	//		case <-updateChannel:
+	//			//updated = true
+	//			fmt.Println("updatechannel case triggered")
+	//			fmt.Fprintf(w, "data: %s\n\n", "update occurred")
+	//			w.(http.Flusher).Flush()
+	//		}
+	//		time.Sleep(1 * time.Second) // adjust the frequency to suit your needs
+	//	}
+	//})
+
 	http.ListenAndServe(":8081", nil)
+
 }
 
 func generateScatterItems(posList []mouseMovement) []opts.ScatterData {
 	items := make([]opts.ScatterData, 0)
+	mu.Lock()
 	for _, mouseMvmt := range posList {
 		items = append(items, opts.ScatterData{
 			Value:        []int{int(mouseMvmt.x), int(mouseMvmt.y)},
@@ -83,6 +175,7 @@ func generateScatterItems(posList []mouseMovement) []opts.ScatterData {
 			SymbolRotate: 10,
 		})
 	}
+	mu.Unlock()
 
 	return items
 }
@@ -91,8 +184,8 @@ func scatterBase(m []mouseMovement) *charts.Scatter {
 	scatter.SetGlobalOptions(
 		charts.WithTitleOpts(opts.Title{Title: "basic scatter example"}),
 		charts.WithInitializationOpts(opts.Initialization{Width: "90vh", Height: "90vh"}),
-		charts.WithXAxisOpts(opts.XAxis{Max: 3500, Min: 0, Show: false}),
-		charts.WithYAxisOpts(opts.YAxis{Max: -3500, Min: 0, Show: false}),
+		charts.WithXAxisOpts(opts.XAxis{Max: 5000, Min: 0}),
+		charts.WithYAxisOpts(opts.YAxis{Max: -2300, Min: 0}),
 	)
 
 	items := generateScatterItems(m)
@@ -101,10 +194,93 @@ func scatterBase(m []mouseMovement) *charts.Scatter {
 	return scatter
 }
 
+type customResponseWriter struct {
+	http.ResponseWriter
+	body *bytes.Buffer
+}
+
+func (w *customResponseWriter) Write(b []byte) (int, error) {
+	return w.body.Write(b)
+}
+
 func httpserver(w http.ResponseWriter, _ *http.Request, m []mouseMovement) {
+	customWriter := &customResponseWriter{
+		ResponseWriter: w,
+		body:           new(bytes.Buffer),
+	}
+
 	// create a new line instance
 	line := scatterBase(m)
-	line.Render(w)
+	line.Render(customWriter)
+
+	// Here, you can modify the response
+	modifiedContent := addCustomJavaScript(customWriter.body.String())
+
+	// Finally, write the modified content to the original writer
+	w.Write([]byte(modifiedContent))
+	//updated = false
+}
+
+func addCustomJavaScript(originalHTML string) string {
+	// Here, add your JavaScript code to the HTML
+	// For example, add a <script> tag before the closing </body> tag
+	jsCode := `<script>
+				let savedUpdateTime;
+				setInterval(() => {
+					// console.log("running fetch");
+					fetch("/lastUpdated")
+						.then(res => res.json())
+						.then(({lastUpdated}) => {
+							// console.log("returned lastUpdated: ", lastUpdated);
+							if(savedUpdateTime && savedUpdateTime !== lastUpdated){
+								window.location.reload();
+							}
+							savedUpdateTime = lastUpdated;
+						})
+				}, 500)
+				</script>`
+	//let source = new EventSource('/events?stream=messages');
+	//source.onmessage = function(event) {
+	//	console.log("message received: ", event.data);
+	//	fetch('/')
+	//	  .then(response => {
+	//		console.log("parsing response to text")
+	//		return response.text()
+	//		})
+	//	  .then(html => {
+	//		    const parser = new DOMParser();
+	//		    const doc = parser.parseFromString(html, 'text/html');
+	//			const fetchedBody = doc.querySelector('body')
+	//			document.body.innerHTML = fetchedBody.innerHTML;
+	//			console.log("running scripts")
+	//			const scripts = Array.from(doc.querySelectorAll('script'));
+	//			  scripts.forEach(oldScript => {
+	//				  const newScript = document.createElement('script');
+	//				  if (oldScript.src) {
+	//					  newScript.src = oldScript.src;
+	//				  } else {
+	//					  newScript.textContent = oldScript.textContent;
+	//				  }
+	//				  document.body.appendChild(newScript);
+	//				  if (oldScript.parentNode) {
+	//					  oldScript.parentNode.removeChild(oldScript);
+	//				  }
+	//			  });
+	//	  })
+
+	//if (event.data === "reload" && !window.alreadyReloaded) {
+	//	console.log("Received message:", event.data);
+	//	window.alreadyReloaded = true; // Prevent immediate reconnection causing a loop
+	//	setTimeout(() => window.location.reload(), 3000)
+	//} else {
+	//	console.log("Received message:", event.data);
+	//}
+	// console.log("message received")
+	// window.location.reload();
+	// };
+	//</script>`
+	headStart := strings.Index(originalHTML, "<head>") + 6
+	return originalHTML[:headStart] + jsCode + originalHTML[headStart:]
 }
 
 type mouseMovement struct {
