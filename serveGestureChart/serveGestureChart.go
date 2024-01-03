@@ -18,6 +18,8 @@ var (
 	posList     = make([]gestureData.MouseMovement, 0)
 )
 
+var charPts = make([]gestureData.MouseMovement, 0)
+
 func ServeGestureChart() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		//fmt.Println("posList: ", posList)
@@ -52,23 +54,43 @@ func ServeGestureChart() {
 	http.ListenAndServe(":8081", nil)
 }
 
-func ServeNewGestureChart(newPosList []gestureData.MouseMovement) {
+func ServeNewGestureChart(newPosList []gestureData.MouseMovement, cps []gestureData.MouseMovement) {
 	mu.Lock()
 	posList = newPosList
+	charPts = cps
 	mu.Unlock()
 	lastUpdated = time.Now()
 }
 
 func generateScatterItems(posList []gestureData.MouseMovement) []opts.ScatterData {
 	items := make([]opts.ScatterData, 0)
+	currCharPt := gestureData.MouseMovement{}
+	if len(charPts) > 0 {
+		currCharPt = charPts[0]
+	}
+	ccpi := 0
 	mu.Lock()
 	for _, mouseMvmt := range posList {
-		items = append(items, opts.ScatterData{
-			Value:        []int{int(mouseMvmt.X), int(mouseMvmt.Y)},
-			Symbol:       "roundRect",
-			SymbolSize:   10,
-			SymbolRotate: 10,
-		})
+		if mouseMvmt == currCharPt {
+			ccpi++
+			if ccpi < len(charPts) {
+				currCharPt = charPts[ccpi]
+			}
+			items = append(items, opts.ScatterData{
+				Value:        []int{int(mouseMvmt.X), int(-mouseMvmt.Y)},
+				Symbol:       "roundRect",
+				SymbolSize:   25,
+				SymbolRotate: 10,
+			})
+		} else {
+			items = append(items, opts.ScatterData{
+				Value:        []int{int(mouseMvmt.X), int(-mouseMvmt.Y)},
+				Symbol:       "roundRect",
+				SymbolSize:   10,
+				SymbolRotate: 10,
+			})
+		}
+
 	}
 	mu.Unlock()
 

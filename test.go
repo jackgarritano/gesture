@@ -64,7 +64,9 @@ func main() {
 		for {
 			improvedGoHook.ImprovedAddMouse("sideFar", true)
 			newPosList := onGestureStart()
-			serveGestureChart.ServeNewGestureChart(newPosList)
+			gest := gestureData.Gesture{Coords: newPosList}
+			charPts := gest.GetCharacteristicPoints()
+			serveGestureChart.ServeNewGestureChart(newPosList, charPts)
 		}
 	}()
 	serveGestureChart.ServeGestureChart()
@@ -72,11 +74,14 @@ func main() {
 
 // front side button click is Button: 5
 func onGestureStart() []gestureData.MouseMovement {
+	//tempCounter := 0
 	gestureEnd := make(chan bool)
 	movements := make([]gestureData.MouseMovement, 0)
 	improvedGoHook.RegisterMouse(hook.MouseDrag, "move", func(e hook.Event) {
-		movements = append(movements, gestureData.MouseMovement{X: e.X, Y: -e.Y, Time: e.When})
-		//fmt.Println("movements: ", movements)
+		//if tempCounter%5 == 0 {
+		movements = append(movements, gestureData.MouseMovement{X: e.X, Y: e.Y, Time: e.When})
+		//}
+		//tempCounter++
 	})
 	improvedGoHook.RegisterMouse(hook.MouseDown, "sideFar", func(e hook.Event) {
 		gestureEnd <- true
@@ -85,9 +90,9 @@ func onGestureStart() []gestureData.MouseMovement {
 	go detectMouseDragStop(&movements, gestureEnd)
 	s := hook.Start()
 	<-improvedGoHook.ProcessMouse(s)
-	for i, j := 0, len(movements)-1; i < j; i, j = i+1, j-1 {
-		movements[i], movements[j] = movements[j], movements[i]
-	}
+	//for i, j := 0, len(movements)-1; i < j; i, j = i+1, j-1 {
+	//	movements[i], movements[j] = movements[j], movements[i]
+	//}
 	return movements
 }
 
